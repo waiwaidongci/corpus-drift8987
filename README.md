@@ -37,7 +37,9 @@ docker compose exec -T backend python -m scripts.seed_demo
 
 五个核心实体CorpusSnapshot、Utterance、ComparisonRun、DriftFinding、ResamplingPlan，均贯穿表/model/schema/service/route/API/store/UI。六页为校对首页、语料快照、比较配置、漂移发现、补采审稿、校对留痕；HistogramBins、FindingSummary、RunTable跨页复用，同时共享Table/Badge/Notice/Empty。
 
-数值特征：duration（秒）、noise（dB）、token_rate（token/s）；类别：language、device。API导入20–5000条JSON数组，每项reference唯一、五特征完整，值可null；数值必须有限，类别必须非空字符串，保留名__NEW__/__MISSING__禁止作为真实类别。没有CSV解析器或真实采集接口。
+数值特征：duration（秒）、noise（dB）、token_rate（token/s）；类别：language、device。小快照直传支持20–5000条JSON数组；百万级快照走分批上传（每批≤5000），先建上传会话再逐批提交、收齐后发布。每项reference唯一、五特征完整，值可null；数值必须有限，类别必须非空字符串，保留名__NEW__/__MISSING__禁止作为真实类别。没有CSV解析器或真实采集接口。
+
+分批上传以 `snapshot_uploads` + `staged_utterances` 暂存：`(upload_id,reference)` 数据库唯一约束兜底，任一批内或跨批出现重复编号即**整份拒绝**（会话与快照置 rejected、锁定不可再写）；并发上传会话按 upload 维度隔离，相同编号在不同会话互不污染。未传完或被拒的快照状态非 ready，不进入快照列表、不参与比较；只有发布成功才分批搬运到 `utterances`。页面可查看每会话批次进度、片段计数、发布结果与拒绝原因。导入与比较的数据面均按256MB预算设计。
 
 `services/binning.py`：只对参考快照在当前切片的非缺失连续值拟合等频分位内边界，`np.quantile`内点去重，尾箱延伸±∞。重复边界会减少实际箱数。`searchsorted(side='right')`使区间左闭右开，正好等于边界进入右箱；候选极值只进入尾箱，绝不改变边界。null单列__MISSING__。参考数值少于2有效值或常量明确失败，不伪造分箱。参考类别字典冻结为排序后的非缺失类别，候选未见类别合入__NEW__，null另入__MISSING__；参考全缺失类别失败。候选常量数值允许比较，候选连续有效值不足2则无法KS而失败。
 
@@ -46,6 +48,8 @@ docker compose exec -T backend python -m scripts.seed_demo
 `services/comparison.py`：所选连续特征的非缺失值执行双侧两样本KS（SciPy ks_2samp，method=auto），统计量是两ECDF最大绝对差。类别不执行KS，p/q为null。`services/multiple_testing.py`对本运行全部所选连续特征组成的一个检验族做Benjamini–Hochberg：排序p_(i)，q_(i)=min_{j≥i}(m p_(j)/j,1)，再映回原顺序；q≤配置FDR α才标记拒绝。默认五特征中m=3，而不是把类别也算入m。BH的FDR解释有独立或适当正相关依赖等条件；这里没有证明真实语料任意依赖条件下的FDR控制。
 
 “建议核对”取 q≤FDRα 或 PSI≥.2 或 JS≥.05，后两者是明确的效应量启发阈值，不是p值或显著性。页面分别显示FDR拒绝和建议核对，未拒绝也不声称分布相同。分布漂移不能证明下游模型变差，补采应先调查采样口径与来源，并独立评估质量。
+
+百万级流式比较（`services/comparison_stream.py`，超 `STREAM_THRESHOLD`（默认5000片段）自动启用，小快照仍走原内存精确路径）。两遍扫描、内存定界：统计遍以 `stream_results`（PyMySQL SSCursor 服务器端游标，客户端只缓冲批量行）读取，连续值累积为分块 `np.float64`（8字节/值，逐特征取用算完即释放），类别只留去重计数，缺失/总量为标量；指纹遍把全量行以紧凑JSONL落盘做外部归并排序（`services/external_sort.py`），逐行喂入与 `fingerprint.py` 字节一致的流式 SHA-256（`services/fingerprint_stream.py`），切片id按 `np.int64` 分块累积；结果JSON流式写 artifact，百万id不物化 Python list。分位箱、桶计数、PSI/JS、KS（仍为 SciPy `ks_2samp(method='auto')`）、BH 与指纹逐函数复用内存版，口径完全不变。worker/backend 设 `MALLOC_ARENA_MAX=2` 并在阶段边界 `malloc_trim(0)` 控制 RSS。
 
 计算失败态包括空快照、空/不足5条的切片、参考连续常量/全缺失、连续有效值不足、非有限值、未知/重复特征及非法平滑/FDR/分箱参数。结果存完整冻结箱、两边计数/平滑比例、原p/q/检验族、参考/候选切片ID和输入SHA-256。指纹覆盖两边全量id/reference/全部五特征（包含null及未选特征）、配置和算法版本，按reference稳定排序；顺序改变不改指纹，任一影响字段变化会改指纹。
 
@@ -78,9 +82,9 @@ npm ci
 npm run dev
 ```
 
-结构：backend/src/{routes,controllers,services,models,schemas,middlewares,utils,constants,config}；backend/scripts/seed_demo.py；backend/migrations/；frontend/src/{api,stores,types,components/common,hooks,pages,router,utils,constants}。metadata首次建表，migrations说明结构，生产增量升级需另行规划。快照名/片段自然键/基准运行名让seed可重复且不覆盖用户修改；基准仅缺失时计算。请求ID和全局错误两个中间件；AuditLog记录登录、导入、任务和审稿；CSV公式前缀转义。
+结构：backend/src/{routes,controllers,services,models,schemas,middlewares,utils,constants,config}；backend/scripts/seed_demo.py；backend/migrations/；frontend/src/{api,stores,types,components/common,hooks,pages,router,utils,constants}。metadata首次建表，config/migrations.py 为既有库幂等补列/补约束，生产增量升级需另行规划。新增 `models/upload.py`（SnapshotUpload/StagedUtterance）与 `services/{external_sort,fingerprint_stream,comparison_stream}.py` 支撑分批上传与流式比较。快照名/片段自然键/基准运行名让seed可重复且不覆盖用户修改；基准仅缺失时计算。请求ID和全局错误两个中间件；AuditLog记录登录、导入、上传批次/发布、任务和审稿；CSV公式前缀转义。
 
-共享枚举位置：后端backend/src/constants/enums.py的Role/RunStatus/PlanStatus/FindingStatus；前端frontend/src/constants/enums.ts对应角色/运行/计划/发现标签；使用于鉴权、运行/计划服务、schema和Badge/Layout/各页面。测试脚本、真实截图、CSV、日志、报告仅位于批次根test-artifacts/gb-0011，源码不含截图/测试报告。真机测试、oracle和已知差异见该目录TESTING.md。
+共享枚举位置：后端backend/src/constants/enums.py的Role/RunStatus/PlanStatus/FindingStatus/UploadStatus/SnapshotStatus；前端frontend/src/constants/enums.ts对应角色/运行/计划/发现标签；使用于鉴权、运行/计划服务、schema和Badge/Layout/各页面。测试脚本、真实截图、CSV、日志、报告仅位于批次根test-artifacts（本批为gb-0012），源码不含截图/测试报告。真机测试、oracle和已知差异见对应目录TESTING.md。
 
 ## 范围与License
 

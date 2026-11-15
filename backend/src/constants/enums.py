@@ -15,3 +15,11 @@ class PlanStatus(StrEnum):
 class FindingStatus(StrEnum):
  REVIEW='review'
  QUIET='quiet'
+class UploadStatus(StrEnum):
+ OPEN='open'
+ PUBLISHED='published'
+ REJECTED='rejected'
+class SnapshotStatus(StrEnum):
+ READY='ready'
+ IMPORTING='importing'
+ REJECTED='rejected'

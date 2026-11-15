@@ -1,5 +1,6 @@
 export interface User{id:number;email:string;name:string;role:string}
-export interface Snapshot{id:number;name:string;kind:string;filename:string;description:string;count:number}
+export interface Snapshot{id:number;name:string;kind:string;filename:string;description:string;count:number;status?:string}
+export interface UploadSession{id:number;snapshot_id:number;name:string;kind:string;filename:string;status:string;total_batches:number;received_batches:number;row_count:number;error:string|null;created_at:string;updated_at:string}
 export interface Utterance{id:number;reference:string;features:Record<string,number|string|null>}
 export interface Binning{kind:string;labels:string[];internal_edges?:number[];categories?:string[];fitted_from:string}
 export interface Metrics{psi:number;js:number;reference_proportions:number[];candidate_proportions:number[];reference_counts:number[];candidate_counts:number[];reference_n:number;candidate_n:number;reference_missing:number;candidate_missing:number;binning:Binning;p_value:number|null;q_value:number|null;ks_statistic:number|null;fdr_reject:boolean;ks_reference_n?:number;ks_candidate_n?:number}

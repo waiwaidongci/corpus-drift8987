@@ -5,6 +5,7 @@ from sqlalchemy import text
 from redis import Redis
 from src.config.database import Base,engine
 from src.config.settings import SEED_DEMO,REDIS_URL
+from src.config.migrations import run_migrations
 from src.models import *
 from src.middlewares.request_id import RequestIDMiddleware
 from src.middlewares.errors import ErrorMiddleware
@@ -12,6 +13,7 @@ from src.routes import auth,snapshots,runs,plans,audit
 @asynccontextmanager
 async def lifespan(app):
  Base.metadata.create_all(engine)
+ run_migrations()
  if SEED_DEMO:
   try:
    from scripts.seed_demo import seed

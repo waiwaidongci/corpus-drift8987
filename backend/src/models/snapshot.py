@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Mapped,mapped_column
-from sqlalchemy import String,DateTime
+from sqlalchemy import String,DateTime,ForeignKey
 from datetime import datetime,timezone
 from src.config.database import Base
 class CorpusSnapshot(Base):
@@ -9,4 +9,6 @@ class CorpusSnapshot(Base):
  kind:Mapped[str]=mapped_column(String(20))
  filename:Mapped[str]=mapped_column(String(160))
  description:Mapped[str]=mapped_column(String(500),default='')
+ status:Mapped[str]=mapped_column(String(20),default='ready')
+ creator_id:Mapped[int|None]=mapped_column(ForeignKey('users.id'),nullable=True)
  created_at:Mapped[datetime]=mapped_column(DateTime,default=lambda:datetime.now(timezone.utc))

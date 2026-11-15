@@ -35,8 +35,12 @@ services:
       JWT_SECRET: ${JWT_SECRET:-local-demo-corpus-drift-change-for-deployment}
       SEED_DEMO: ${SEED_DEMO:-true}
       ARTIFACT_DIR: /artifacts
+      SPOOL_DIR: /artifacts/spool
+      MALLOC_ARENA_MAX: "2"
     ports: ["${BACKEND_PORT:-19215}:8000"]
     volumes: ["artifacts:/artifacts"]
+    # 导入/比较按 256MB 数据面预算设计；限额留出解释器与 glibc 余量作为护栏
+    mem_limit: 384m
     depends_on:
       db: {condition: service_healthy}
       redis: {condition: service_healthy}
@@ -50,8 +54,12 @@ services:
     build: ./backend
     container_name: ${COMPOSE_PROJECT_NAME:-corpus-drift}-worker
     command: ["celery", "-A", "src.worker.app", "worker", "--loglevel=info", "--concurrency=1", "--hostname=worker@%h"]
-    environment: *backend-env
+    environment:
+      <<: *backend-env
+      # 超过该片段数走流式（外部归并+SSCursor）管线，内存定界
+      STREAM_THRESHOLD: "5000"
     volumes: ["artifacts:/artifacts"]
+    mem_limit: 384m
     depends_on:
       db: {condition: service_healthy}
       redis: {condition: service_healthy}
